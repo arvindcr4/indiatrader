@@ -72,6 +72,16 @@ pip install -r requirements.txt
 4. Backtest strategy: `python -m indiatrader.backtesting.run`
 5. Deploy for live trading: `python -m indiatrader.deployment.serve`
 
+## Adam Mancini Style Strategy for Nifty
+
+The package now includes an implementation of a trading strategy that mimics
+the intraday levels frequently shared by **Adam Mancini**.  It computes daily
+pivot, support and resistance levels from the prior session and looks for
+breakouts of the opening range in the direction of the prevailing bias.  The
+class `AdamManciniNiftyStrategy` can be imported from `indiatrader.strategies`
+and used to generate ``long_signal`` and ``short_signal`` columns on minute
+level data for the Nifty index.
+
 ## Project Roadmap
 
 - [x] Project structure setup
