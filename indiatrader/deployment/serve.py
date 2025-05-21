@@ -1,3 +1,4 @@
+
 """
 Entry point for serving model inference.
 """
@@ -522,3 +523,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

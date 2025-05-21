@@ -1,5 +1,5 @@
 # Paper Trading Integration
 
-- [ ] Connect to broker APIs (e.g., Zerodha) in paper mode.
-- [ ] Implement risk management hooks for order sizing.
-- [ ] Log all trades for audit purposes.
+ - [x] Connect to broker APIs (e.g., Zerodha) in paper mode.
+ - [x] Implement risk management hooks for order sizing.
+ - [x] Log all trades for audit purposes.
