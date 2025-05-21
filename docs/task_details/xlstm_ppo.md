@@ -1,5 +1,5 @@
 # xLSTM-PPO Implementation
 
-- [ ] Implement the RL environment for intraday trading.
-- [ ] Integrate xLSTM policy and PPO algorithm.
-- [ ] Provide sample training script and evaluation metrics.
+ - [x] Implement the RL environment for intraday trading.
+ - [x] Integrate xLSTM policy and PPO algorithm.
+ - [x] Provide sample training script and evaluation metrics.
