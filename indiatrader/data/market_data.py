@@ -1,5 +1,5 @@
 """
-Market data connectors for Indian exchanges.
+Market data connectors for Indian exchanges using Dhan and ICICI Breeze APIs.
 """
 
 import requests
@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Union, Tuple
 from datetime import datetime, timedelta
 import pyarrow as pa
 import pyarrow.parquet as pq
+import os
 
 from indiatrader.data.config import get_api_credentials, get_market_symbols
 
@@ -24,33 +25,34 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 
-class NSEConnector:
+class DhanConnector:
     """
-    Connector for National Stock Exchange (NSE) India.
+    Connector for Dhan API.
     """
     
-    def __init__(self, api_key: Optional[str] = None, api_url: Optional[str] = None):
+    def __init__(self, client_id: Optional[str] = None, access_token: Optional[str] = None):
         """
-        Initialize NSE connector.
+        Initialize Dhan connector.
         
         Args:
-            api_key: NSE API key. If None, will be loaded from config.
-            api_url: NSE API base URL. If None, will be loaded from config.
+            client_id: Dhan client ID. If None, will be loaded from config.
+            access_token: Dhan access token. If None, will be loaded from config.
         """
-        credentials = get_api_credentials("market_data", "nse")
-        self.api_key = api_key or credentials.get("api_key")
-        self.api_url = api_url or credentials.get("api_url")
+        credentials = get_api_credentials("market_data", "dhan")
+        self.client_id = client_id or credentials.get("client_id")
+        self.access_token = access_token or credentials.get("access_token") or os.environ.get("DHAN_ACCESS_TOKEN")
         
-        # Check if credentials are available
-        if not self.api_key:
-            logger.warning("NSE API key not found in configuration. Some functionality may be limited.")
-        
-        # Default headers
-        self.headers = {
-            "Accept": "application/json",
-            "X-API-KEY": self.api_key,
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
-        }
+        # Try to import Dhan API client
+        try:
+            from dhanhq import dhanhq
+            self.client = dhanhq(self.client_id, self.access_token)
+            logger.info(f"Initialized Dhan API client for {self.client_id}")
+        except ImportError:
+            logger.warning("dhanhq package not found. Install it using 'pip install dhanhq'")
+            self.client = None
+        except Exception as e:
+            logger.error(f"Failed to initialize Dhan API client: {str(e)}")
+            self.client = None
     
     def get_market_status(self) -> Dict:
         """
@@ -59,9 +61,17 @@ class NSEConnector:
         Returns:
             Dict containing market status information
         """
-        url = f"{self.api_url}/marketStatus"
-        response = self._make_request(url)
-        return response
+        try:
+            # Dhan doesn't have a specific market status API
+            # We'll check if we can get a quote as a proxy for market status
+            quote = self.get_quote("NIFTY")
+            if quote:
+                return {"status": "open", "message": "Market is open"}
+            else:
+                return {"status": "closed", "message": "Market might be closed"}
+        except Exception as e:
+            logger.error(f"Failed to get market status: {str(e)}")
+            return {"status": "unknown", "message": f"Error: {str(e)}"}
     
     def get_indices(self) -> pd.DataFrame:
         """
@@ -70,27 +80,214 @@ class NSEConnector:
         Returns:
             DataFrame containing index information
         """
-        url = f"{self.api_url}/allIndices"
-        response = self._make_request(url)
-        
-        if response and "data" in response:
-            return pd.DataFrame(response["data"])
-        
-        return pd.DataFrame()
+        try:
+            if not self.client:
+                return pd.DataFrame()
+                
+            # Get quotes for major indices
+            indices = ["NIFTY 50", "BANKNIFTY", "NIFTY IT", "NIFTY AUTO", "NIFTY PHARMA"]
+            data = []
+            
+            for idx in indices:
+                try:
+                    # Try to get index data using quote_data
+                    quote_response = self.client.quote_data(
+                        exchange="NSE",
+                        symbol=idx
+                    )
+                    
+                    if isinstance(quote_response, dict) and "quote" in quote_response:
+                        quote_data = quote_response["quote"]
+                        
+                        data.append({
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'open': float(quote_data.get("open_price", 0)),
+                            'high': float(quote_data.get("high_price", 0)),
+                            'low': float(quote_data.get("low_price", 0)),
+                            'close': float(quote_data.get("last_price", 0)),
+                            'volume': int(quote_data.get("total_volume", 0)),
+                            'change': float(quote_data.get("net_change", 0)),
+                            'change_pct': float(quote_data.get("net_change_percentage", 0)),
+                            'symbol': idx
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to get quote data for index {idx}: {str(e)}")
+                    
+                    # Try OHLC data as fallback
+                    try:
+                        ohlc_response = self.client.ohlc_data(
+                            exchange="NSE",
+                            symbol=idx
+                        )
+                        
+                        if isinstance(ohlc_response, dict) and "ohlc" in ohlc_response:
+                            ohlc_data = ohlc_response["ohlc"]
+                            
+                            data.append({
+                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                'open': float(ohlc_data.get("open", 0)),
+                                'high': float(ohlc_data.get("high", 0)),
+                                'low': float(ohlc_data.get("low", 0)),
+                                'close': float(ohlc_data.get("close", 0)),
+                                'volume': int(ohlc_data.get("volume", 0)),
+                                'change': 0,  # May not be available
+                                'change_pct': 0,  # May not be available
+                                'symbol': idx
+                            })
+                    except Exception as ohlc_error:
+                        logger.warning(f"Failed to get OHLC data for index {idx}: {str(ohlc_error)}")
+                        
+                        # Try historical daily data as a last resort
+                        try:
+                            # Get today's data
+                            end_date = datetime.now().strftime("%Y-%m-%d")
+                            start_date = end_date  # Same day
+                            
+                            historical_response = self.client.historical_daily_data(
+                                exchange="NSE",
+                                symbol=idx,
+                                start_date=start_date,
+                                end_date=end_date
+                            )
+                            
+                            if isinstance(historical_response, dict) and "candles" in historical_response:
+                                if len(historical_response["candles"]) > 0:
+                                    latest_data = historical_response["candles"][-1]
+                                    
+                                    data.append({
+                                        'timestamp': latest_data[0],
+                                        'open': float(latest_data[1]),
+                                        'high': float(latest_data[2]),
+                                        'low': float(latest_data[3]),
+                                        'close': float(latest_data[4]),
+                                        'volume': int(latest_data[5]),
+                                        'change': 0,  # Need previous day data to calculate
+                                        'change_pct': 0,  # Need previous day data to calculate
+                                        'symbol': idx
+                                    })
+                        except Exception as hist_error:
+                            logger.warning(f"Failed to get historical data for index {idx}: {str(hist_error)}")
+            
+            return pd.DataFrame(data)
+        except Exception as e:
+            logger.error(f"Failed to get indices: {str(e)}")
+            return pd.DataFrame()
     
     def get_quote(self, symbol: str) -> Dict:
         """
         Get quote for a specific symbol.
         
         Args:
-            symbol: NSE symbol (e.g., 'RELIANCE')
+            symbol: Trading symbol (e.g., 'RELIANCE')
         
         Returns:
             Dict containing quote information
         """
-        url = f"{self.api_url}/quote-equity?symbol={symbol}"
-        response = self._make_request(url)
-        return response
+        try:
+            if not self.client:
+                return {}
+                
+            # Determine exchange based on symbol
+            exchange = "NSE"
+            if symbol in ["NIFTY", "BANKNIFTY", "NIFTY 50", "NIFTY BANK"]:
+                exchange = "NSE"
+                
+            # Try the quote_data method available in dhanhq 2.0.2
+            try:
+                quote_response = self.client.quote_data(
+                    exchange=exchange,
+                    symbol=symbol
+                )
+                
+                if isinstance(quote_response, dict) and "quote" in quote_response:
+                    quote_data = quote_response["quote"]
+                    
+                    # Create a standardized result
+                    result = {
+                        "tradingsymbol": symbol,
+                        "exchange": exchange,
+                        "open": float(quote_data.get("open_price", 0)),
+                        "high": float(quote_data.get("high_price", 0)),
+                        "low": float(quote_data.get("low_price", 0)),
+                        "lastPrice": float(quote_data.get("last_price", 0)),
+                        "close": float(quote_data.get("close_price", 0)),
+                        "totalTradedVolume": int(quote_data.get("total_volume", 0)),
+                        "change": float(quote_data.get("net_change", 0)),
+                        "pChange": float(quote_data.get("net_change_percentage", 0)),
+                        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                    return result
+            except Exception as quote_error:
+                logger.warning(f"Error getting quote data: {str(quote_error)}")
+                
+            # Try OHLC data as a fallback
+            try:
+                ohlc_response = self.client.ohlc_data(
+                    exchange=exchange,
+                    symbol=symbol
+                )
+                
+                if isinstance(ohlc_response, dict) and "ohlc" in ohlc_response:
+                    ohlc_data = ohlc_response["ohlc"]
+                    
+                    # Create a standardized result
+                    result = {
+                        "tradingsymbol": symbol,
+                        "exchange": exchange,
+                        "open": float(ohlc_data.get("open", 0)),
+                        "high": float(ohlc_data.get("high", 0)),
+                        "low": float(ohlc_data.get("low", 0)),
+                        "lastPrice": float(ohlc_data.get("close", 0)),  # Use close as lastPrice
+                        "close": float(ohlc_data.get("close", 0)),
+                        "totalTradedVolume": int(ohlc_data.get("volume", 0)),
+                        "change": 0,  # May not be available
+                        "pChange": 0,  # May not be available
+                        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                    return result
+            except Exception as ohlc_error:
+                logger.warning(f"Error getting OHLC data: {str(ohlc_error)}")
+                
+            # Try historical data as a last resort
+            try:
+                # Get today's data
+                end_date = datetime.now().strftime("%Y-%m-%d")
+                start_date = end_date  # Same day
+                
+                historical_response = self.client.historical_daily_data(
+                    exchange=exchange,
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+                
+                if isinstance(historical_response, dict) and "candles" in historical_response:
+                    if len(historical_response["candles"]) > 0:
+                        latest_data = historical_response["candles"][-1]
+                        
+                        # Create a standardized result from historical data
+                        result = {
+                            "tradingsymbol": symbol,
+                            "exchange": exchange,
+                            "open": float(latest_data[1]),  # Open is at index 1
+                            "high": float(latest_data[2]),  # High is at index 2
+                            "low": float(latest_data[3]),   # Low is at index 3
+                            "lastPrice": float(latest_data[4]),  # Close is at index 4
+                            "close": float(latest_data[4]),
+                            "totalTradedVolume": int(latest_data[5]),  # Volume is at index 5
+                            "change": 0,  # Calculate if possible
+                            "pChange": 0,  # Calculate if possible
+                            "timestamp": latest_data[0]  # Timestamp is at index 0
+                        }
+                        return result
+            except Exception as hist_error:
+                logger.warning(f"Error getting historical data: {str(hist_error)}")
+            
+            logger.error(f"All quote methods failed for {symbol}")
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to get quote for {symbol}: {str(e)}")
+            return {}
     
     def get_historical_data(
         self, 
@@ -103,7 +300,7 @@ class NSEConnector:
         Get historical data for a symbol.
         
         Args:
-            symbol: NSE symbol (e.g., 'RELIANCE')
+            symbol: Trading symbol (e.g., 'RELIANCE')
             start_date: Start date in YYYY-MM-DD format or datetime
             end_date: End date in YYYY-MM-DD format or datetime
             interval: Data interval ('1m', '5m', '15m', '30m', '1h', '1d')
@@ -111,178 +308,259 @@ class NSEConnector:
         Returns:
             DataFrame with historical price/volume data
         """
-        # Convert dates to string format if datetime objects
-        if isinstance(start_date, datetime):
-            start_date = start_date.strftime("%Y-%m-%d")
-        
-        if isinstance(end_date, datetime):
-            end_date = end_date.strftime("%Y-%m-%d")
-        
-        interval_mapping = {
-            "1m": "MINUTE",
-            "5m": "5MINUTE",
-            "15m": "15MINUTE",
-            "30m": "30MINUTE",
-            "1h": "HOUR",
-            "1d": "DAY",
-        }
-        
-        nse_interval = interval_mapping.get(interval, "DAY")
-        
-        url = f"{self.api_url}/historical/cm/equity?symbol={symbol}&from={start_date}&to={end_date}&series=EQ&interval={nse_interval}"
-        response = self._make_request(url)
-        
-        if response and "data" in response:
-            data = response["data"]
-            df = pd.DataFrame(data)
-            
-            # Convert columns to appropriate types
-            if not df.empty:
-                # Convert timestamp to datetime
-                df["timestamp"] = pd.to_datetime(df["timestamp"])
+        try:
+            if not self.client:
+                return pd.DataFrame()
                 
-                # Convert numeric columns
-                numeric_cols = ["open", "high", "low", "close", "volume"]
-                for col in numeric_cols:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col])
+            # Convert dates to string format if datetime objects
+            if isinstance(start_date, datetime):
+                start_date = start_date.strftime("%Y-%m-%d")
             
-            return df
-        
-        return pd.DataFrame()
-    
-    def get_order_book(self, symbol: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """
-        Get Level II order book data for a symbol.
-        
-        Args:
-            symbol: NSE symbol (e.g., 'RELIANCE')
-        
-        Returns:
-            Tuple of (bids_df, asks_df) DataFrames containing order book data
-        """
-        url = f"{self.api_url}/market-depth?symbol={symbol}"
-        response = self._make_request(url)
-        
-        bids_df = pd.DataFrame()
-        asks_df = pd.DataFrame()
-        
-        if response and "data" in response:
-            data = response["data"]
-            
-            if "bids" in data:
-                bids_df = pd.DataFrame(data["bids"])
-            
-            if "asks" in data:
-                asks_df = pd.DataFrame(data["asks"])
-        
-        return bids_df, asks_df
-    
-    def save_to_parquet(
-        self, 
-        symbol: str, 
-        data: pd.DataFrame, 
-        data_type: str,
-        interval: str = "1d",
-        base_path: str = "./data"
-    ) -> str:
-        """
-        Save market data to Parquet format.
-        
-        Args:
-            symbol: Symbol name
-            data: DataFrame to save
-            data_type: Type of data ('ohlcv', 'quotes', 'orderbook')
-            interval: Data interval for OHLCV data
-            base_path: Base directory to save files
-        
-        Returns:
-            Path to saved file
-        """
-        import os
-        
-        # Create directory structure if it doesn't exist
-        os.makedirs(f"{base_path}/nse/{data_type}/{interval}", exist_ok=True)
-        
-        # Generate filename
-        timestamp = datetime.now().strftime("%Y%m%d")
-        filename = f"{base_path}/nse/{data_type}/{interval}/{symbol}_{timestamp}.parquet"
-        
-        # Convert to PyArrow Table and write to Parquet
-        table = pa.Table.from_pandas(data)
-        pq.write_table(table, filename)
-        
-        logger.info(f"Saved {symbol} {data_type} data to {filename}")
-        return filename
-    
-    def _make_request(self, url: str, max_retries: int = 3, retry_delay: int = 2) -> Dict:
-        """
-        Make HTTP request with retry logic.
-        
-        Args:
-            url: API endpoint URL
-            max_retries: Maximum number of retry attempts
-            retry_delay: Delay between retries in seconds
-        
-        Returns:
-            API response as dictionary
-        """
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(url, headers=self.headers, timeout=10)
-                response.raise_for_status()  # Raise exception for 4XX/5XX responses
+            if isinstance(end_date, datetime):
+                end_date = end_date.strftime("%Y-%m-%d")
                 
-                return response.json()
-            
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Request failed (attempt {attempt+1}/{max_retries}): {str(e)}")
+            # Determine exchange
+            exchange = "NSE"
+            if any(idx in symbol for idx in ["NIFTY", "BANKNIFTY"]):
+                exchange = "NSE"
                 
-                if attempt < max_retries - 1:
-                    logger.info(f"Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                else:
-                    logger.error(f"Failed after {max_retries} attempts: {str(e)}")
-        
-        return {}
+            # Use historical_daily_data for daily data (available in dhanhq 2.0.2)
+            if interval == "1d":
+                try:
+                    logger.info(f"Fetching daily historical data for {symbol}")
+                    response = self.client.historical_daily_data(
+                        exchange=exchange,
+                        symbol=symbol,
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                    
+                    # Process the response
+                    if isinstance(response, dict) and "candles" in response:
+                        candles = response["candles"]
+                        
+                        # Create DataFrame from candles
+                        df = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                        
+                        # Convert types
+                        df["timestamp"] = pd.to_datetime(df["timestamp"])
+                        for col in ["open", "high", "low", "close"]:
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                        df["volume"] = pd.to_numeric(df["volume"], errors='coerce').astype(int)
+                        
+                        # Calculate change and percentage
+                        df["change"] = df["close"].diff()
+                        df["change_pct"] = df["close"].pct_change() * 100
+                        
+                        return df
+                except Exception as daily_error:
+                    logger.warning(f"Error fetching daily historical data: {str(daily_error)}")
+            
+            # Use intraday_minute_data for intraday data
+            if interval in ["1m", "5m", "15m", "30m", "1h"]:
+                try:
+                    logger.info(f"Fetching intraday data for {symbol}")
+                    
+                    # Map interval to minutes
+                    minutes_map = {
+                        "1m": 1,
+                        "5m": 5,
+                        "15m": 15,
+                        "30m": 30,
+                        "1h": 60
+                    }
+                    minutes = minutes_map.get(interval, 1)
+                    
+                    response = self.client.intraday_minute_data(
+                        exchange=exchange,
+                        symbol=symbol,
+                        minutes=minutes
+                    )
+                    
+                    # Process the response
+                    if isinstance(response, dict) and "candles" in response:
+                        candles = response["candles"]
+                        
+                        # Create DataFrame from candles
+                        df = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                        
+                        # Convert types
+                        df["timestamp"] = pd.to_datetime(df["timestamp"])
+                        for col in ["open", "high", "low", "close"]:
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                        df["volume"] = pd.to_numeric(df["volume"], errors='coerce').astype(int)
+                        
+                        # Calculate change and percentage
+                        df["change"] = df["close"].diff()
+                        df["change_pct"] = df["close"].pct_change() * 100
+                        
+                        return df
+                except Exception as intraday_error:
+                    logger.warning(f"Error fetching intraday data: {str(intraday_error)}")
+            
+            # No data available
+            logger.warning(f"No historical data available for {symbol} with interval {interval}")
+            return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"Failed to get historical data for {symbol}: {str(e)}")
+            return pd.DataFrame()
 
 
-class BSEConnector:
+class ICICIBreezeConnector:
     """
-    Connector for Bombay Stock Exchange (BSE) India.
+    Connector for ICICI Breeze API.
     """
     
-    def __init__(self, api_key: Optional[str] = None, api_url: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None, session_token: Optional[str] = None):
         """
-        Initialize BSE connector.
+        Initialize ICICI Breeze connector.
         
         Args:
-            api_key: BSE API key. If None, will be loaded from config.
-            api_url: BSE API base URL. If None, will be loaded from config.
+            api_key: ICICI Breeze API key. If None, will be loaded from config.
+            api_secret: ICICI Breeze API secret. If None, will be loaded from config.
+            session_token: ICICI Breeze session token. If None, will be loaded from config.
         """
-        credentials = get_api_credentials("market_data", "bse")
+        credentials = get_api_credentials("market_data", "icici")
         self.api_key = api_key or credentials.get("api_key")
-        self.api_url = api_url or credentials.get("api_url")
+        self.api_secret = api_secret or credentials.get("api_secret") or os.environ.get("ICICI_API_SECRET")
+        self.session_token = session_token or credentials.get("session_token") or os.environ.get("ICICI_SESSION_TOKEN")
         
-        # Default headers
-        self.headers = {
-            "Accept": "application/json",
-            "X-API-KEY": self.api_key,
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
-        }
+        # Try to import ICICI Breeze API client
+        try:
+            from breeze_connect import BreezeConnect
+            self.client = BreezeConnect(api_key=self.api_key)
+            
+            # Generate session
+            self.client.generate_session(
+                api_secret=self.api_secret,
+                session_token=self.session_token
+            )
+            logger.info("ICICI Breeze session generated successfully")
+        except ImportError:
+            logger.warning("breeze-connect package not found. Install it using 'pip install breeze-connect'")
+            self.client = None
+        except Exception as e:
+            logger.error(f"Failed to initialize ICICI Breeze API client: {str(e)}")
+            self.client = None
+    
+    def get_market_status(self) -> Dict:
+        """
+        Get current market status.
+        
+        Returns:
+            Dict containing market status information
+        """
+        try:
+            # ICICI Breeze doesn't have a specific market status API
+            # Try to get customer details as a proxy for connectivity
+            if not self.client:
+                return {"status": "closed", "message": "API client not initialized"}
+                
+            customer_details = self.client.get_customer_details()
+            if customer_details and "Success" in customer_details:
+                return {"status": "open", "message": "Market is open"}
+            else:
+                return {"status": "closed", "message": "Market might be closed"}
+        except Exception as e:
+            logger.error(f"Failed to get market status: {str(e)}")
+            return {"status": "unknown", "message": f"Error: {str(e)}"}
+    
+    def get_indices(self) -> pd.DataFrame:
+        """
+        Get current index values.
+        
+        Returns:
+            DataFrame containing index information
+        """
+        try:
+            if not self.client:
+                return pd.DataFrame()
+                
+            # Get quotes for major indices
+            indices = [
+                {"code": "NIFTY 50", "exchange": "NSE"},
+                {"code": "BANKNIFTY", "exchange": "NSE"},
+                {"code": "NIFTY IT", "exchange": "NSE"},
+                {"code": "NIFTY AUTO", "exchange": "NSE"},
+                {"code": "NIFTY PHARMA", "exchange": "NSE"}
+            ]
+            
+            data = []
+            for idx in indices:
+                try:
+                    quote = self.client.get_quotes(
+                        exchange_code=idx["exchange"],
+                        stock_code=idx["code"]
+                    )
+                    
+                    if quote and "Success" in quote:
+                        quote_data = quote["Success"]
+                        data.append({
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'open': float(quote_data.get("open", 0)),
+                            'high': float(quote_data.get("high", 0)),
+                            'low': float(quote_data.get("low", 0)),
+                            'close': float(quote_data.get("close", 0)),
+                            'volume': int(quote_data.get("volume", 0)),
+                            'change': float(quote_data.get("change", 0)),
+                            'change_pct': float(quote_data.get("change_percentage", 0)),
+                            'symbol': idx["code"]
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to get quote for index {idx['code']}: {str(e)}")
+            
+            return pd.DataFrame(data)
+        except Exception as e:
+            logger.error(f"Failed to get indices: {str(e)}")
+            return pd.DataFrame()
     
     def get_quote(self, symbol: str) -> Dict:
         """
         Get quote for a specific symbol.
         
         Args:
-            symbol: BSE scrip code (e.g., '500325' for Reliance)
+            symbol: Trading symbol (e.g., 'RELIANCE')
         
         Returns:
             Dict containing quote information
         """
-        url = f"{self.api_url}/quote?scripcode={symbol}"
-        response = self._make_request(url)
-        return response
+        try:
+            if not self.client:
+                return {}
+                
+            # Determine exchange based on symbol
+            exchange = "NSE"
+            if symbol in ["NIFTY", "BANKNIFTY", "NIFTY 50", "NIFTY BANK"]:
+                exchange = "NSE"
+                
+            quote = self.client.get_quotes(
+                exchange_code=exchange,
+                stock_code=symbol
+            )
+            
+            # Check if we got a valid response
+            if quote and "Success" in quote:
+                # Transform to standardized format
+                quote_data = quote["Success"]
+                result = {
+                    "tradingsymbol": symbol,
+                    "exchange": exchange,
+                    "open": float(quote_data.get("open", 0)),
+                    "high": float(quote_data.get("high", 0)),
+                    "low": float(quote_data.get("low", 0)),
+                    "lastPrice": float(quote_data.get("ltp", 0)),
+                    "close": float(quote_data.get("close", 0)),
+                    "totalTradedVolume": int(quote_data.get("volume", 0)),
+                    "change": float(quote_data.get("change", 0)),
+                    "pChange": float(quote_data.get("change_percentage", 0)),
+                    "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                return result
+            
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to get quote for {symbol}: {str(e)}")
+            return {}
     
     def get_historical_data(
         self, 
@@ -295,38 +573,127 @@ class BSEConnector:
         Get historical data for a symbol.
         
         Args:
-            symbol: BSE scrip code
+            symbol: Trading symbol (e.g., 'RELIANCE')
             start_date: Start date in YYYY-MM-DD format or datetime
             end_date: End date in YYYY-MM-DD format or datetime
-            interval: Data interval ('1d' only for BSE)
+            interval: Data interval ('1m', '5m', '15m', '30m', '1h', '1d')
         
         Returns:
             DataFrame with historical price/volume data
         """
-        # Convert dates to string format if datetime objects
-        if isinstance(start_date, datetime):
-            start_date = start_date.strftime("%Y%m%d")
-        else:
-            # Convert YYYY-MM-DD to YYYYMMDD
-            start_date = start_date.replace("-", "")
-        
-        if isinstance(end_date, datetime):
-            end_date = end_date.strftime("%Y%m%d")
-        else:
-            # Convert YYYY-MM-DD to YYYYMMDD
-            end_date = end_date.replace("-", "")
-        
-        url = f"{self.api_url}/history?scripcode={symbol}&fromdate={start_date}&todate={end_date}&flag=0"
-        response = self._make_request(url)
-        
-        if response and "data" in response:
-            data = response["data"]
-            df = pd.DataFrame(data)
+        try:
+            if not self.client:
+                return pd.DataFrame()
+                
+            # Convert dates to ICICI Breeze format (DD-MM-YYYY)
+            if isinstance(start_date, datetime):
+                start_date_str = start_date.strftime("%d-%m-%Y")
+            else:
+                # Convert from YYYY-MM-DD to DD-MM-YYYY
+                parts = start_date.split('-')
+                if len(parts) == 3:
+                    start_date_str = f"{parts[2]}-{parts[1]}-{parts[0]}"
+                else:
+                    start_date_str = start_date
+            
+            if isinstance(end_date, datetime):
+                end_date_str = end_date.strftime("%d-%m-%Y")
+            else:
+                # Convert from YYYY-MM-DD to DD-MM-YYYY
+                parts = end_date.split('-')
+                if len(parts) == 3:
+                    end_date_str = f"{parts[2]}-{parts[1]}-{parts[0]}"
+                else:
+                    end_date_str = end_date
+                
+            # Map interval to ICICI Breeze format
+            interval_mapping = {
+                "1m": "1minute",
+                "5m": "5minute",
+                "15m": "15minute",
+                "30m": "30minute",
+                "1h": "1hour",
+                "1d": "1day",
+            }
+            
+            icici_interval = interval_mapping.get(interval, "1day")
+            
+            # Determine exchange
+            exchange = "NSE"
+            if any(idx in symbol for idx in ["NIFTY", "BANKNIFTY"]):
+                exchange = "NSE"
+            
+            # Special handling for indices
+            if symbol in ["NIFTY", "BANKNIFTY", "NIFTY 50", "NIFTY BANK"]:
+                # Map to correct ICICI symbol format for indices
+                if symbol == "NIFTY" or symbol == "NIFTY 50":
+                    icici_symbol = "NIFTY 50"
+                elif symbol == "BANKNIFTY" or symbol == "NIFTY BANK":
+                    icici_symbol = "NIFTY BANK"
+                else:
+                    icici_symbol = symbol
+                
+                try:
+                    # Specific method for index data
+                    response = self.client.get_historical_data(
+                        interval=icici_interval,
+                        from_date=start_date_str,
+                        to_date=end_date_str,
+                        stock_code=icici_symbol,
+                        exchange_code=exchange,
+                        product_type="INDEX"
+                    )
+                except Exception as idx_error:
+                    logger.warning(f"Error fetching index data: {str(idx_error)}. Trying standard method.")
+                    response = None
+            else:
+                response = None
+                
+            # Try standard equity if index-specific method failed or not needed
+            if response is None:
+                try:
+                    # Get historical data
+                    response = self.client.get_historical_data(
+                        exchange_code=exchange,
+                        stock_code=symbol,
+                        interval=icici_interval,
+                        from_date=start_date_str,
+                        to_date=end_date_str
+                    )
+                except Exception as std_error:
+                    logger.error(f"Standard historical data method failed: {str(std_error)}")
+                    response = None
+            
+            # Process ICICI response
+            if response and isinstance(response, dict) and "Success" in response:
+                data = response["Success"]
+                df = pd.DataFrame(data)
+            elif isinstance(response, pd.DataFrame):
+                df = response
+            else:
+                # No fallback to yfinance, only use real API data
+                df = pd.DataFrame()
+            
+            # Rename columns if needed
+            column_map = {
+                "datetime": "timestamp",
+                "open": "open",
+                "high": "high",
+                "low": "low",
+                "close": "close",
+                "volume": "volume"
+            }
+            
+            df.rename(columns=column_map, inplace=True, errors='ignore')
             
             # Convert columns to appropriate types
             if not df.empty:
-                # Convert date to datetime
-                df["date"] = pd.to_datetime(df["date"], format="%d/%m/%Y")
+                # Convert timestamp to datetime
+                if "timestamp" in df.columns:
+                    df["timestamp"] = pd.to_datetime(df["timestamp"])
+                elif "datetime" in df.columns:
+                    df["timestamp"] = pd.to_datetime(df["datetime"])
+                    df.drop("datetime", axis=1, inplace=True, errors='ignore')
                 
                 # Convert numeric columns
                 numeric_cols = ["open", "high", "low", "close", "volume"]
@@ -334,36 +701,62 @@ class BSEConnector:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col])
             
-            return df
-        
-        return pd.DataFrame()
-    
-    def _make_request(self, url: str, max_retries: int = 3, retry_delay: int = 2) -> Dict:
-        """
-        Make HTTP request with retry logic.
-        
-        Args:
-            url: API endpoint URL
-            max_retries: Maximum number of retry attempts
-            retry_delay: Delay between retries in seconds
-        
-        Returns:
-            API response as dictionary
-        """
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(url, headers=self.headers, timeout=10)
-                response.raise_for_status()  # Raise exception for 4XX/5XX responses
-                
-                return response.json()
+                # Calculate change and change_pct if not present
+                if "change" not in df.columns and "close" in df.columns:
+                    df["change"] = df["close"].diff()
+                    
+                if "change_pct" not in df.columns and "close" in df.columns and "change" in df.columns:
+                    df["change_pct"] = (df["change"] / df["close"].shift(1) * 100)
             
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Request failed (attempt {attempt+1}/{max_retries}): {str(e)}")
-                
-                if attempt < max_retries - 1:
-                    logger.info(f"Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                else:
-                    logger.error(f"Failed after {max_retries} attempts: {str(e)}")
+            return df
+        except Exception as e:
+            logger.error(f"Failed to get historical data for {symbol}: {str(e)}")
+            return pd.DataFrame()
+
+# Backward compatibility aliases
+NSEConnector = DhanConnector
+BSEConnector = ICICIBreezeConnector
+
+def get_api_credentials(section: str, provider: str) -> Dict:
+    """
+    Get API credentials from config file or environment variables.
+    
+    Args:
+        section: Config section (e.g., 'market_data')
+        provider: API provider (e.g., 'dhan', 'icici')
+    
+    Returns:
+        Dict containing API credentials
+    """
+    try:
+        # Try to load from config file
+        config_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config.yaml")
         
+        if os.path.exists(config_file):
+            try:
+                import yaml
+                with open(config_file, "r") as f:
+                    config = yaml.safe_load(f)
+                
+                if config and "data_sources" in config and section in config["data_sources"] and provider in config["data_sources"][section]:
+                    return config["data_sources"][section][provider]
+            except Exception as e:
+                logger.warning(f"Failed to load credentials from config file: {str(e)}")
+        
+        # Try environment variables as fallback
+        if provider == "dhan":
+            return {
+                "client_id": os.environ.get("DHAN_CLIENT_ID", ""),
+                "access_token": os.environ.get("DHAN_ACCESS_TOKEN", "")
+            }
+        elif provider == "icici":
+            return {
+                "api_key": os.environ.get("ICICI_API_KEY", ""),
+                "api_secret": os.environ.get("ICICI_API_SECRET", ""),
+                "session_token": os.environ.get("ICICI_SESSION_TOKEN", "")
+            }
+        else:
+            return {}
+    except Exception as e:
+        logger.error(f"Error getting API credentials: {str(e)}")
         return {}

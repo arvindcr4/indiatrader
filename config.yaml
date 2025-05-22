@@ -4,8 +4,8 @@
 data_sources:
   market_data:
     nse:
-      api_key: "YOUR_NSE_API_KEY"
-      api_url: "https://api.nseindia.com/v1"
+      api_key: ""
+      api_url: "https://www.nseindia.com/api"
       symbols: ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "HDFC", "SBIN", "BAJFINANCE", "BHARTIARTL", "ITC"]
       timeframes: ["1m", "5m", "15m", "1h", "1d"]
       data_types: ["trades", "quotes", "orderbook"]
@@ -16,6 +16,21 @@ data_sources:
       symbols: ["500325", "532540", "500209", "500180", "532174", "500010", "500112", "500034", "532454", "500875"]
       timeframes: ["1m", "5m", "15m", "1h", "1d"]
       data_types: ["trades", "quotes"]
+    
+    dhan:
+      client_id: "1106879513"
+      access_token: "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzQ3OTczNTAxLCJ0b2tlbkNvbnN1bWVyVHlwZSI6IlNFTEYiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwNjg3OTUxMyJ9.gMvSqTUyArWichU75kV6cgYQvbwOBXCuYRpJ7_z5VIOS002UEW-Hl5Wcm7bOn-Pb6bpi3AMrsa2kuN3-ZihKwQ"
+      symbols: ["NIFTY", "BANKNIFTY", "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
+      timeframes: ["1m", "5m", "15m", "30m", "1h", "1d"]
+      data_types: ["quotes", "historical"]
+      
+    icici:
+      api_key: "YOUR_ICICI_API_KEY"
+      api_secret: "YOUR_ICICI_API_SECRET"
+      session_token: "YOUR_ICICI_SESSION_TOKEN"
+      symbols: ["NIFTY 50", "BANKNIFTY", "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
+      timeframes: ["1m", "5m", "15m", "30m", "1h", "1d"]
+      data_types: ["quotes", "historical"]
   
   alternative_data:
     news:
