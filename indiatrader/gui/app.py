@@ -116,6 +116,11 @@ class StrategyApp(tk.Tk):
                               command=self._load_file, style='Zerodha.TButton')
         open_btn.pack(side='left')
 
+        # Load Live Data button
+        live_btn = ttk.Button(controls_frame, text="🔴 Load Live Data", 
+                             command=self._show_live_data_info, style='Zerodha.TButton')
+        live_btn.pack(side='left', padx=(10, 0))
+
         # Status label
         self.status_label = ttk.Label(controls_frame, text="Ready to load data",
                                       style='Zerodha.TLabel')
@@ -215,6 +220,30 @@ class StrategyApp(tk.Tk):
         summary_text = (f"Displaying last 200 of {len(df)} records | "
                         f"Long Signals: {long_signals} | Short Signals: {short_signals}")
         self.summary_label.configure(text=summary_text)
+
+    def _show_live_data_info(self) -> None:
+        """Show information about live data functionality."""
+        message = """🔴 Live Market Data
+
+The enhanced live data functionality is available in the new live data GUI.
+
+Features:
+• Real-time NSE/BSE market data
+• Live quotes and historical data
+• Index data (NIFTY, BANK NIFTY, etc.)
+• Demo mode when API not configured
+
+To use live data:
+1. Run: python live_data_gui.py
+2. Click "Load Live Data" button
+3. Enter symbol (NIFTY, RELIANCE, etc.)
+4. Select exchange (NSE/BSE)
+5. Choose data type (Quote/Historical/Indices)
+
+The live data GUI provides enhanced functionality
+with threading support and real-time updates."""
+        
+        messagebox.showinfo("Live Data Information", message)
 
 
 def main(open_range_minutes: int = 15) -> None:
