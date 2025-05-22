@@ -1,0 +1,3 @@
+([('IndiaTrader-DataViewer',
+   '/Users/arvindcr/indiatrader/build_configs/dist/IndiaTrader-DataViewer',
+   'EXECUTABLE')],)

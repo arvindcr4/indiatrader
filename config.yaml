@@ -1,0 +1,144 @@
+# IndiaTrader Configuration
+
+# Data Sources
+data_sources:
+  market_data:
+    nse:
+      api_key: "YOUR_NSE_API_KEY"
+      api_url: "https://api.nseindia.com/v1"
+      symbols: ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "HDFC", "SBIN", "BAJFINANCE", "BHARTIARTL", "ITC"]
+      timeframes: ["1m", "5m", "15m", "1h", "1d"]
+      data_types: ["trades", "quotes", "orderbook"]
+    
+    bse:
+      api_key: "YOUR_BSE_API_KEY"
+      api_url: "https://api.bseindia.com/v1"
+      symbols: ["500325", "532540", "500209", "500180", "532174", "500010", "500112", "500034", "532454", "500875"]
+      timeframes: ["1m", "5m", "15m", "1h", "1d"]
+      data_types: ["trades", "quotes"]
+  
+  alternative_data:
+    news:
+      sources: ["moneycontrol", "economictimes", "businessstandard"]
+      api_key: "YOUR_NEWS_API_KEY"
+    
+    social:
+      twitter:
+        api_key: "YOUR_TWITTER_API_KEY"
+        api_secret: "YOUR_TWITTER_API_SECRET"
+        keywords: ["Nifty", "Sensex", "NSE", "BSE", "India Stock"]
+      
+      reddit:
+        client_id: "YOUR_REDDIT_CLIENT_ID"
+        client_secret: "YOUR_REDDIT_CLIENT_SECRET"
+        subreddits: ["IndianStreetBets", "IndianInvestments", "DalalStreetTalks"]
+
+# Feature Engineering
+features:
+  technical:
+    - name: "moving_averages"
+      params: {"windows": [5, 10, 20, 50, 200]}
+    
+    - name: "rsi"
+      params: {"window": 14}
+    
+    - name: "bollinger_bands"
+      params: {"window": 20, "num_std": 2}
+    
+    - name: "macd"
+      params: {"fast": 12, "slow": 26, "signal": 9}
+  
+  order_flow:
+    - name: "vwap"
+      params: {"windows": [5, 15, 30, 60]}
+    
+    - name: "order_imbalance"
+      params: {"levels": 5}
+    
+    - name: "delta_volume"
+      params: {"windows": [5, 15, 30]}
+  
+  nlp:
+    - name: "sentiment_score"
+      model: "FinBERT"
+      params: {"max_length": 512}
+    
+    - name: "news_embedding"
+      model: "text-embedding-3-small"
+      params: {"dimensions": 1536}
+
+# Models
+models:
+  transformer:
+    architecture: "PatchTST"
+    params:
+      patch_len: 12
+      stride: 8
+      d_model: 128
+      n_heads: 8
+      dropout: 0.2
+      activation: "gelu"
+    training:
+      batch_size: 64
+      learning_rate: 0.0001
+      epochs: 100
+      early_stopping: 10
+  
+  reinforcement:
+    architecture: "xLSTM_PPO"
+    params:
+      lstm_layers: 2
+      lstm_units: 128
+      policy_units: [64, 32]
+      value_units: [64, 32]
+      gamma: 0.99
+      lambda_gae: 0.95
+    training:
+      episodes: 1000
+      update_freq: 20
+      clip_param: 0.2
+  
+  generative:
+    architecture: "GAN"
+    params:
+      generator_units: [128, 256, 128]
+      discriminator_units: [128, 64, 1]
+      latent_dim: 100
+    training:
+      batch_size: 32
+      learning_rate: 0.0002
+      epochs: 200
+
+# Backtesting
+backtesting:
+  start_date: "2022-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1000000
+  transaction_costs:
+    commission: 0.0003  # 0.03%
+    slippage: 0.0002    # 0.02%
+  position_sizing:
+    method: "kelly"
+    max_position: 0.2   # Max 20% of capital per position
+  walk_forward:
+    train_window: 180   # days
+    test_window: 30     # days
+    step: 30            # days
+
+# Deployment
+deployment:
+  inference:
+    gpu_enabled: true
+    batch_size: 16
+    max_latency_ms: 100
+  
+  api:
+    host: "0.0.0.0"
+    port: 8000
+    log_level: "info"
+  
+  broker:
+    name: "zerodha"
+    api_key: "YOUR_ZERODHA_API_KEY"
+    api_secret: "YOUR_ZERODHA_API_SECRET"
+    paper_trading: true  # Set to false for live trading

@@ -1,0 +1,53 @@
+{
+    "dhan": {
+        "client_id": "YOUR_DHAN_CLIENT_ID",
+        "access_token": "YOUR_DHAN_ACCESS_TOKEN"
+    },
+    "icici": {
+        "api_key": "U6xG1V56S02aX5r95I933222!74f4#k2",
+        "api_secret": "YOUR_ICICI_API_SECRET",
+        "session_token": "YOUR_ICICI_SESSION_TOKEN"
+    },
+    "trading": {
+        "default_broker": "dhan",
+        "default_product_type": "intraday",
+        "default_quantity": 1,
+        "default_open_range_minutes": 15,
+        "default_start_time": "09:15",
+        "default_end_time": "15:30",
+        "max_trades_per_day": 5,
+        "interval_seconds": 60
+    },
+    "symbols": {
+        "nifty": {
+            "symbol": "NIFTY",
+            "exchange": "NFO",
+            "is_futures": true,
+            "expiry_date": "29-May-2025"
+        },
+        "banknifty": {
+            "symbol": "BANKNIFTY",
+            "exchange": "NFO",
+            "is_futures": true,
+            "expiry_date": "29-May-2025"
+        },
+        "reliance": {
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "is_futures": false
+        }
+    },
+    "strategies": {
+        "adam_mancini": {
+            "open_range_minutes": 15,
+            "pivot_threshold": 0.1,
+            "min_open_range_size": 20
+        }
+    },
+    "backtest": {
+        "start_date": "01-05-2025",
+        "end_date": "21-05-2025",
+        "initial_capital": 100000,
+        "commission_rate": 0.0005
+    }
+}
